@@ -43,11 +43,12 @@ def test_quote_panier_vide():
     assert q.shipping == Decimal("0.00")
 
 
-def test_remise_volume():
-    # 9 units: no discount
-    assert line_total(Decimal("10.00"), 9) == Decimal("90.00")
-    # 10 units: 5% discount
-    assert line_total(Decimal("10.00"), 10) == Decimal("95.00")
+@pytest.mark.parametrize("qty, expected_total", [
+    (9, Decimal("90.00")),
+    (10, Decimal("95.00")),
+])
+def test_remise_volume(qty, expected_total):
+    assert line_total(Decimal("10.00"), qty) == expected_total
 
 
 @pytest.mark.parametrize("qty", [0, -1, 100, "2", True])
@@ -56,16 +57,15 @@ def test_quantite_invalide(qty):
         line_total(Decimal("10.00"), qty)
 
 
-def test_coupons_welcome10(mock_catalog):
+@pytest.mark.parametrize("price, qty, expected_discount", [
+    (Decimal("19.99"), 1, Decimal("0.00")),
+    (Decimal("20.00"), 1, Decimal("2.00")),
+])
+def test_coupons_welcome10(price, qty, expected_discount):
     # WELCOME10: -10% if subtotal >= 20
-    # Item 1: 20€, qty 1 -> subtotal 20, discount 2
-    q = quote([{"product_id": "P1", "qty": 2}], coupon="WELCOME10")
-    assert q.discount == Decimal("2.00")
-
-    # Item 1: 19.99€, qty 1 -> subtotal 19.99, discount 0
-    with patch("minishop.pricing.get_product", return_value=Product(id="P1", name="P1", price=Decimal("19.99"), stock=100)):
-        q = quote([{"product_id": "P1", "qty": 1}], coupon="WELCOME10")
-        assert q.discount == Decimal("0.00")
+    with patch("minishop.pricing.get_product", return_value=Product(id="P1", name="P1", price=price, stock=100)):
+        q = quote([{"product_id": "P1", "qty": qty}], coupon="WELCOME10")
+        assert q.discount == expected_discount
 
 
 def test_coupons_fixed5(mock_catalog):
@@ -83,16 +83,17 @@ def test_coupons_freeship(mock_catalog):
 def test_coupon_student15(mock_catalog):
     # STUDENT15: -15% on non-volume-discounted lines
     # Line 1: 10€, qty 1 -> total 10 (no volume discount)
-    # Line 2: 10€, qty 10 -> total 9 (volume discount)
-    # Subtotal = 19. Discount = 15% of 10 = 1.50.
+    # Line 2: 10€, qty 10 -> total 95 (5% volume discount)
+    # Subtotal = 10 + 95 = 105. Discount = 15% of 10 = 1.50.
+    # Total = 105 - 1.50 = 103.50.
     items = [
         {"product_id": "P1", "qty": 1},  # 10€
-        {"product_id": "P1", "qty": 10},  # 10€ * 0.9 = 9€
+        {"product_id": "P1", "qty": 10},  # 10€ * 10 * 0.95 = 95€
     ]
     q = quote(items, coupon="STUDENT15")
-    assert q.subtotal == Decimal("19.00")
+    assert q.subtotal == Decimal("105.00")
     assert q.discount == Decimal("1.50")
-    assert q.total == Decimal("17.50")
+    assert q.total == Decimal("103.50")
 
 
 def test_coupon_inconnu(mock_catalog):
@@ -106,15 +107,15 @@ def test_coupon_casse(mock_catalog):
     assert q.discount == Decimal("2.00")
 
 
-def test_livraison_offerte(mock_catalog):
-    # Total after discount >= 50 -> shipping 0
-    # Item 1: 60€, qty 1 -> subtotal 60, discount 0, total 60, shipping 0
-    q = quote([{"product_id": "P2", "qty": 3}], coupon=None)  # 60€
-    assert q.shipping == Decimal("0.00")
-
-    # Total after discount < 50 -> shipping 4.90
-    q = quote([{"product_id": "P1", "qty": 4}], coupon=None)  # 40€
-    assert q.shipping == Decimal("4.90")
+@pytest.mark.parametrize("subtotal, expected_shipping", [
+    (Decimal("49.99"), Decimal("4.90")),
+    (Decimal("50.00"), Decimal("0.00")),
+])
+def test_livraison_offerte(subtotal, expected_shipping):
+    # Livraison: 4.90€; offerte si le total après remise >= 50 €.
+    with patch("minishop.pricing.get_product", return_value=Product(id="P1", name="P1", price=subtotal, stock=100)):
+        q = quote([{"product_id": "P1", "qty": 1}])
+        assert q.shipping == expected_shipping
 
 
 def test_produit_inconnu(mock_catalog):
